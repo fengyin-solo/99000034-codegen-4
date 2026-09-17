@@ -84,6 +84,7 @@ const activeCategoryName = computed(() => {
 onMounted(() => {
   linksStore.fetchLinks()
   linksStore.fetchCategories()
+  linksStore.fetchCategoryQuota()
   linksStore.fetchTags()
 })
 

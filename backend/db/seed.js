@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const { initDatabase, getDb } = require('./init');
+const { normalizeCategoryName } = require('../utils/categoryPolicy');
 
 function seed() {
   initDatabase();
@@ -22,7 +23,7 @@ function seed() {
 
   // Create categories
   const insertCategory = db.prepare(
-    'INSERT INTO categories (user_id, name, color) VALUES (?, ?, ?)'
+    'INSERT INTO categories (user_id, name, name_key, color) VALUES (?, ?, ?, ?)'
   );
 
   const categories = [
@@ -36,7 +37,7 @@ function seed() {
 
   const categoryIds = {};
   categories.forEach((cat) => {
-    const result = insertCategory.run(userId, cat.name, cat.color);
+    const result = insertCategory.run(userId, cat.name, normalizeCategoryName(cat.name), cat.color);
     categoryIds[cat.name] = result.lastInsertRowid;
   });
 

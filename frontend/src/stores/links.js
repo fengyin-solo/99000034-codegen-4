@@ -11,6 +11,9 @@ export const useLinksStore = defineStore('links', () => {
   const totalPages = ref(1)
   const loading = ref(false)
 
+  // 分类容量口径：count 已有数量，limit 上限，remaining 剩余名额，over_limit 是否为超限老账号
+  const categoryQuota = ref({ count: 0, limit: 0, remaining: 0, over_limit: false })
+
   // Filters
   const selectedCategory = ref(null)
   const selectedTag = ref(null)
@@ -49,6 +52,27 @@ export const useLinksStore = defineStore('links', () => {
     }
   }
 
+  async function fetchCategoryQuota() {
+    try {
+      const response = await categoriesApi.getQuota()
+      categoryQuota.value = response.data
+    } catch (error) {
+      console.error('Failed to fetch category quota:', error)
+    }
+  }
+
+  function setCategoryQuotaFromError(error) {
+    const data = error?.response?.data
+    if (data && typeof data.count === 'number' && typeof data.limit === 'number') {
+      categoryQuota.value = {
+        count: data.count,
+        limit: data.limit,
+        remaining: Math.max(0, data.limit - data.count),
+        over_limit: data.count > data.limit,
+      }
+    }
+  }
+
   async function fetchTags() {
     try {
       const response = await tagsApi.getTags()
@@ -82,15 +106,31 @@ export const useLinksStore = defineStore('links', () => {
   }
 
   async function createCategory(data) {
-    const response = await categoriesApi.createCategory(data)
-    await fetchCategories()
-    return response.data
+    try {
+      const response = await categoriesApi.createCategory(data)
+      await fetchCategories()
+      await fetchCategoryQuota()
+      return response.data
+    } catch (error) {
+      setCategoryQuotaFromError(error)
+      throw error
+    }
   }
 
   async function updateCategory(id, data) {
-    const response = await categoriesApi.updateCategory(id, data)
-    await fetchCategories()
-    return response.data
+    try {
+      const response = await categoriesApi.updateCategory(id, data)
+      await fetchCategories()
+      await fetchCategoryQuota()
+      // 若发生合并，当前选中的分类可能已不存在
+      if (response.data?.merged && response.data.id !== id && selectedCategory.value === id) {
+        selectedCategory.value = response.data.id
+      }
+      return response.data
+    } catch (error) {
+      setCategoryQuotaFromError(error)
+      throw error
+    }
   }
 
   async function deleteCategory(id) {
@@ -99,6 +139,7 @@ export const useLinksStore = defineStore('links', () => {
       selectedCategory.value = null
     }
     await fetchCategories()
+    await fetchCategoryQuota()
     await fetchLinks(currentPage.value)
   }
 
@@ -134,11 +175,13 @@ export const useLinksStore = defineStore('links', () => {
     currentPage,
     totalPages,
     loading,
+    categoryQuota,
     selectedCategory,
     selectedTag,
     searchQuery,
     fetchLinks,
     fetchCategories,
+    fetchCategoryQuota,
     fetchTags,
     createLink,
     updateLink,

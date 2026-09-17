@@ -54,8 +54,18 @@
         :sub-title="`共解析 ${importResult.total} 条书签，导入 ${importResult.imported} 条，跳过 ${importResult.skipped} 条重复项`"
       >
         <template #extra>
-          <el-button type="primary" @click="$router.push('/')">查看链接</el-button>
-          <el-button @click="resetImport">继续导入</el-button>
+          <el-alert
+            v-if="importResult.uncategorized_by_limit > 0"
+            type="warning"
+            :closable="false"
+            show-icon
+            class="limit-alert"
+            :title="`有 ${importResult.uncategorized_by_limit} 条书签因分类数量已达上限未能归入新文件夹，已放入未分类。删除一些分类后可重新整理。`"
+          />
+          <div class="result-actions">
+            <el-button type="primary" @click="$router.push('/')">查看链接</el-button>
+            <el-button @click="resetImport">继续导入</el-button>
+          </div>
         </template>
       </el-result>
     </el-card>
@@ -150,5 +160,17 @@ function resetImport() {
 .file-name {
   margin-bottom: 12px;
   color: #606266;
+}
+
+.limit-alert {
+  max-width: 480px;
+  margin: 0 auto 12px;
+  text-align: left;
+}
+
+.result-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
 }
 </style>

@@ -1,7 +1,9 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 
-const DB_PATH = path.join(__dirname, '..', 'data', 'links.db');
+const DB_PATH = process.env.DB_PATH
+  ? path.resolve(process.env.DB_PATH)
+  : path.join(__dirname, '..', 'data', 'links.db');
 
 let db;
 
@@ -30,6 +32,7 @@ function initDatabase() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
       name TEXT NOT NULL,
+      name_key TEXT,
       color TEXT DEFAULT '#409EFF',
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
@@ -63,6 +66,10 @@ function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_link_tags_link_id ON link_tags(link_id);
     CREATE INDEX IF NOT EXISTS idx_link_tags_tag ON link_tags(tag);
     CREATE INDEX IF NOT EXISTS idx_categories_user_id ON categories(user_id);
+
+    -- 同一账号下规范分类名唯一（大小写/空格不同视为同名）
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_user_name_key
+      ON categories(user_id, name_key);
   `);
 
   return db;

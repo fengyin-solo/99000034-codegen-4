@@ -1,6 +1,7 @@
 const express = require('express');
 const { getDb } = require('../db/init');
 const { authMiddleware } = require('../middleware/auth');
+const { categoryBelongsToUser } = require('../utils/categoryStore');
 
 const router = express.Router();
 
@@ -78,11 +79,16 @@ router.post('/', (req, res) => {
     return res.status(400).json({ error: 'URL and title are required' });
   }
 
+  const categoryId = category_id || null;
+  if (!categoryBelongsToUser(userId, categoryId)) {
+    return res.status(400).json({ error: '分类不存在或已被删除' });
+  }
+
   const db = getDb();
 
   const result = db.prepare(
     'INSERT INTO links (user_id, url, title, description, category_id, status, is_read_later, review_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(userId, url, title, description || '', category_id || null, 'unchecked', is_read_later ? 1 : 0, review_date || null);
+  ).run(userId, url, title, description || '', categoryId, 'unchecked', is_read_later ? 1 : 0, review_date || null);
 
   const linkId = result.lastInsertRowid;
 
@@ -310,16 +316,21 @@ router.put('/:id', (req, res) => {
     return res.status(404).json({ error: 'Link not found' });
   }
 
+  const nextCategoryId = category_id !== undefined ? (category_id || null) : link.category_id;
+  if (!categoryBelongsToUser(userId, nextCategoryId)) {
+    return res.status(400).json({ error: '分类不存在或已被删除' });
+  }
+
   // Update link
   db.prepare(`
     UPDATE links
     SET url = ?, title = ?, description = ?, category_id = ?, is_read_later = ?, review_date = ?, review_status = ?
     WHERE id = ?
   `).run(
-    url || link.url, 
-    title || link.title, 
-    description ?? link.description, 
-    category_id ?? link.category_id,
+    url || link.url,
+    title || link.title,
+    description ?? link.description,
+    nextCategoryId,
     is_read_later !== undefined ? (is_read_later ? 1 : 0) : link.is_read_later,
     review_date !== undefined ? review_date : link.review_date,
     review_status || link.review_status,

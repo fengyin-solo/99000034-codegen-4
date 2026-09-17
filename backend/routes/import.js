@@ -3,6 +3,11 @@ const multer = require('multer');
 const { getDb } = require('../db/init');
 const { authMiddleware } = require('../middleware/auth');
 const { parseBookmarks } = require('../utils/bookmark-parser');
+const {
+  cleanCategoryName,
+  sanitizeCategoryColor,
+} = require('../utils/categoryPolicy');
+const { getOrCreateCategoryForUser } = require('../utils/categoryStore');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -26,17 +31,29 @@ router.post('/bookmarks', upload.single('file'), (req, res) => {
   const db = getDb();
   const userId = req.userId;
 
-  // Create categories from folders if they don't exist
-  const getOrCreateCategory = db.transaction((folderName) => {
-    let category = db.prepare('SELECT id FROM categories WHERE user_id = ? AND name = ?').get(userId, folderName);
-    if (!category) {
-      const colors = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#909399', '#9B59B6', '#1ABC9C', '#E74C3C'];
-      const color = colors[Math.floor(Math.random() * colors.length)];
-      const result = db.prepare('INSERT INTO categories (user_id, name, color) VALUES (?, ?, ?)').run(userId, folderName, color);
-      return result.lastInsertRowid;
+  // Per-folder id cache so the limit/duplicate check runs once per folder
+  const categoryIdByKey = new Map();
+  const colors = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#909399', '#9B59B6', '#1ABC9C', '#E74C3C'];
+
+  function resolveCategoryId(folderName) {
+    const clean = cleanCategoryName(folderName);
+    if (!clean) return null;
+
+    if (categoryIdByKey.has(clean.toLowerCase())) {
+      return categoryIdByKey.get(clean.toLowerCase());
     }
-    return category.id;
-  });
+
+    const color = colors[Math.floor(Math.random() * colors.length)];
+    const { status, category } = getOrCreateCategoryForUser(
+      userId,
+      clean,
+      sanitizeCategoryColor(color)
+    );
+
+    const id = status === 'limit' ? null : category.id;
+    categoryIdByKey.set(clean.toLowerCase(), id);
+    return id;
+  }
 
   const insertLink = db.prepare(
     'INSERT INTO links (user_id, url, title, description, category_id, status) VALUES (?, ?, ?, ?, ?, ?)'
@@ -46,6 +63,8 @@ router.post('/bookmarks', upload.single('file'), (req, res) => {
 
   let imported = 0;
   let skipped = 0;
+  let uncategorizedByLimit = 0;
+  const limitFolders = new Set();
 
   const importBookmarks = db.transaction(() => {
     for (const bookmark of bookmarks) {
@@ -56,7 +75,14 @@ router.post('/bookmarks', upload.single('file'), (req, res) => {
         continue;
       }
 
-      const categoryId = bookmark.folder !== 'Uncategorized' ? getOrCreateCategory(bookmark.folder) : null;
+      let categoryId = null;
+      if (bookmark.folder && bookmark.folder !== 'Uncategorized') {
+        categoryId = resolveCategoryId(bookmark.folder);
+        if (categoryId === null) {
+          uncategorizedByLimit++;
+          limitFolders.add(cleanCategoryName(bookmark.folder));
+        }
+      }
 
       insertLink.run(userId, bookmark.url, bookmark.title, '', categoryId, 'unchecked');
       imported++;
@@ -65,11 +91,18 @@ router.post('/bookmarks', upload.single('file'), (req, res) => {
 
   importBookmarks();
 
+  let message = `Successfully imported ${imported} bookmarks`;
+  if (uncategorizedByLimit > 0) {
+    message += `; ${uncategorizedByLimit} bookmarks kept uncategorized because the category limit was reached`;
+  }
+
   res.json({
-    message: `Successfully imported ${imported} bookmarks`,
+    message,
     imported,
     skipped,
     total: bookmarks.length,
+    uncategorized_by_limit: uncategorizedByLimit,
+    limit_folders: [...limitFolders],
   });
 });
 

@@ -37,3 +37,8 @@ node_modules/
 
 # Trae
 .trae/
+
+# Build output
+frontend/dist/
+backend/data/*.db-wal
+backend/data/*.db-shm
