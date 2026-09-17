@@ -51,7 +51,7 @@
         v-if="importResult"
         :icon="importResult.imported > 0 ? 'success' : 'warning'"
         :title="importResult.message"
-        :sub-title="`共解析 ${importResult.total} 条书签，导入 ${importResult.imported} 条，跳过 ${importResult.skipped} 条重复项`"
+        :sub-title="resultSubtitle"
       >
         <template #extra>
           <el-button type="primary" @click="$router.push('/')">查看链接</el-button>
@@ -63,13 +63,23 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { importApi } from '../api'
 
 const selectedFile = ref(null)
 const importing = ref(false)
 const importResult = ref(null)
+
+const resultSubtitle = computed(() => {
+  if (!importResult.value) return ''
+  const r = importResult.value
+  let text = `共解析 ${r.total} 条书签，导入 ${r.imported} 条，跳过 ${r.skipped} 条重复项`
+  if (r.uncategorized_by_limit > 0) {
+    text += `；因分类数量已达上限，${r.uncategorized_by_limit} 条链接已归入“未分类”（重名分类已自动合并，未重复创建）`
+  }
+  return text
+})
 
 function handleFileChange(file) {
   selectedFile.value = file.raw

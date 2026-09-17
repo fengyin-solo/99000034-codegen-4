@@ -7,6 +7,17 @@ const router = express.Router();
 // All routes require authentication
 router.use(authMiddleware);
 
+// 校验分类归属：null 表示未分类；非空时必须属于当前账号且仍然存在
+function resolveValidCategoryId(db, userId, categoryId) {
+  if (categoryId === null || categoryId === undefined) return null;
+  const id = Number(categoryId);
+  if (!Number.isInteger(id)) return false;
+  const category = db
+    .prepare('SELECT id FROM categories WHERE id = ? AND user_id = ?')
+    .get(id, userId);
+  return category ? id : false;
+}
+
 // GET /api/links - List links with pagination, filtering, search
 router.get('/', (req, res) => {
   const { page = 1, limit = 12, category, tag, search } = req.query;
@@ -80,9 +91,17 @@ router.post('/', (req, res) => {
 
   const db = getDb();
 
+  const validCategoryId = resolveValidCategoryId(db, userId, category_id);
+  if (validCategoryId === false) {
+    return res.status(400).json({
+      code: 'INVALID_CATEGORY',
+      error: 'Category not found',
+    });
+  }
+
   const result = db.prepare(
     'INSERT INTO links (user_id, url, title, description, category_id, status, is_read_later, review_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(userId, url, title, description || '', category_id || null, 'unchecked', is_read_later ? 1 : 0, review_date || null);
+  ).run(userId, url, title, description || '', validCategoryId, 'unchecked', is_read_later ? 1 : 0, review_date || null);
 
   const linkId = result.lastInsertRowid;
 
@@ -310,16 +329,32 @@ router.put('/:id', (req, res) => {
     return res.status(404).json({ error: 'Link not found' });
   }
 
+  // 未传 category_id 时维持原值；显式传 null 表示移到未分类；非空时校验归属
+  let nextCategoryId;
+  if (category_id === undefined) {
+    nextCategoryId = link.category_id;
+  } else if (category_id === null) {
+    nextCategoryId = null;
+  } else {
+    nextCategoryId = resolveValidCategoryId(db, userId, category_id);
+    if (nextCategoryId === false) {
+      return res.status(400).json({
+        code: 'INVALID_CATEGORY',
+        error: 'Category not found',
+      });
+    }
+  }
+
   // Update link
   db.prepare(`
     UPDATE links
     SET url = ?, title = ?, description = ?, category_id = ?, is_read_later = ?, review_date = ?, review_status = ?
     WHERE id = ?
   `).run(
-    url || link.url, 
-    title || link.title, 
-    description ?? link.description, 
-    category_id ?? link.category_id,
+    url || link.url,
+    title || link.title,
+    description ?? link.description,
+    nextCategoryId,
     is_read_later !== undefined ? (is_read_later ? 1 : 0) : link.is_read_later,
     review_date !== undefined ? review_date : link.review_date,
     review_status || link.review_status,

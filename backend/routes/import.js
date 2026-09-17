@@ -3,6 +3,7 @@ const multer = require('multer');
 const { getDb } = require('../db/init');
 const { authMiddleware } = require('../middleware/auth');
 const { parseBookmarks } = require('../utils/bookmark-parser');
+const { CATEGORY_LIMIT, normalizeCategoryName, categoryCompareKey } = require('../utils/category-rules');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -26,16 +27,36 @@ router.post('/bookmarks', upload.single('file'), (req, res) => {
   const db = getDb();
   const userId = req.userId;
 
-  // Create categories from folders if they don't exist
+  // 与分类接口共用同一套命名口径：
+  // - 名称先做 trim / 空格折叠
+  // - 仅大小写、空格不同视为同一分类（合并复用，不新建）
+  // - 已达上限时不再新建，链接归入“未分类”
+  const colors = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#909399', '#9B59B6', '#1ABC9C', '#E74C3C'];
+
   const getOrCreateCategory = db.transaction((folderName) => {
-    let category = db.prepare('SELECT id FROM categories WHERE user_id = ? AND name = ?').get(userId, folderName);
-    if (!category) {
-      const colors = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#909399', '#9B59B6', '#1ABC9C', '#E74C3C'];
-      const color = colors[Math.floor(Math.random() * colors.length)];
-      const result = db.prepare('INSERT INTO categories (user_id, name, color) VALUES (?, ?, ?)').run(userId, folderName, color);
-      return result.lastInsertRowid;
+    const normalized = normalizeCategoryName(folderName);
+    if (!normalized) return null;
+
+    const existing = db
+      .prepare('SELECT id, name FROM categories WHERE user_id = ?')
+      .all(userId);
+    const match = existing.find((cat) => categoryCompareKey(cat.name) === categoryCompareKey(normalized));
+    if (match) {
+      return match.id;
     }
-    return category.id;
+
+    const { count } = db
+      .prepare('SELECT COUNT(*) as count FROM categories WHERE user_id = ?')
+      .get(userId);
+    if (count >= CATEGORY_LIMIT) {
+      return null; // 容量已满：链接仍会导入，只是不带分类
+    }
+
+    const color = colors[Math.floor(Math.random() * colors.length)];
+    const result = db
+      .prepare('INSERT INTO categories (user_id, name, color) VALUES (?, ?, ?)')
+      .run(userId, normalized, color);
+    return result.lastInsertRowid;
   });
 
   const insertLink = db.prepare(
@@ -46,6 +67,7 @@ router.post('/bookmarks', upload.single('file'), (req, res) => {
 
   let imported = 0;
   let skipped = 0;
+  let uncategorizedByLimit = 0;
 
   const importBookmarks = db.transaction(() => {
     for (const bookmark of bookmarks) {
@@ -56,7 +78,11 @@ router.post('/bookmarks', upload.single('file'), (req, res) => {
         continue;
       }
 
-      const categoryId = bookmark.folder !== 'Uncategorized' ? getOrCreateCategory(bookmark.folder) : null;
+      let categoryId = null;
+      if (bookmark.folder && bookmark.folder !== 'Uncategorized') {
+        categoryId = getOrCreateCategory(bookmark.folder);
+        if (categoryId === null) uncategorizedByLimit++;
+      }
 
       insertLink.run(userId, bookmark.url, bookmark.title, '', categoryId, 'unchecked');
       imported++;
@@ -69,6 +95,7 @@ router.post('/bookmarks', upload.single('file'), (req, res) => {
     message: `Successfully imported ${imported} bookmarks`,
     imported,
     skipped,
+    uncategorized_by_limit: uncategorizedByLimit,
     total: bookmarks.length,
   });
 });

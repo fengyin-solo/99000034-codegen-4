@@ -3,10 +3,31 @@
     <el-card>
       <template #header>
         <div class="sidebar-header">
-          <h3>分类</h3>
-          <el-button text size="small" @click="showAddCategory">
-            <el-icon><Plus /></el-icon>
-          </el-button>
+          <h3>
+            分类
+            <span class="category-usage" :class="{ full: linksStore.categoryLimitReached }">
+              {{ linksStore.categoryCount }}/{{ linksStore.categoryLimit }}
+            </span>
+          </h3>
+          <el-tooltip
+            :content="limitTooltip"
+            :disabled="!linksStore.categoryLimitReached"
+            placement="top"
+          >
+            <span>
+              <el-button
+                text
+                size="small"
+                :disabled="linksStore.categoryLimitReached"
+                @click="showAddCategory"
+              >
+                <el-icon><Plus /></el-icon>
+              </el-button>
+            </span>
+          </el-tooltip>
+        </div>
+        <div v-if="linksStore.categoryLimitReached" class="limit-hint">
+          分类数量已达上限（{{ linksStore.categoryCount }}/{{ linksStore.categoryLimit }}）。删除或合并一个不用的分类后才能新增；分类下的链接会自动回到“未分类”，不会丢失。
         </div>
       </template>
 
@@ -46,9 +67,15 @@
     </el-card>
 
     <el-dialog v-model="categoryDialogVisible" :title="editingCategory ? '编辑分类' : '添加分类'" width="360px">
-      <el-form :model="categoryForm" label-width="60px">
+      <el-form :model="categoryForm" label-width="60px" @submit.prevent>
         <el-form-item label="名称">
-          <el-input v-model="categoryForm.name" placeholder="分类名称" />
+          <el-input
+            v-model="categoryForm.name"
+            placeholder="分类名称"
+            maxlength="50"
+            show-word-limit
+            @keyup.enter="saveCategory"
+          />
         </el-form-item>
         <el-form-item label="颜色">
           <el-color-picker v-model="categoryForm.color" />
@@ -56,14 +83,14 @@
       </el-form>
       <template #footer>
         <el-button @click="categoryDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="saveCategory">保存</el-button>
+        <el-button type="primary" :loading="saving" @click="saveCategory">保存</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { useLinksStore } from '../stores/links'
 
@@ -71,12 +98,25 @@ const linksStore = useLinksStore()
 
 const categoryDialogVisible = ref(false)
 const editingCategory = ref(null)
+const saving = ref(false)
 const categoryForm = reactive({
   name: '',
   color: '#409EFF',
 })
 
+const limitTooltip = computed(() =>
+  linksStore.categoryLimitReached
+    ? `已达上限 ${linksStore.categoryCount}/${linksStore.categoryLimit}，请先删除或合并一个分类`
+    : ''
+)
+
 function showAddCategory() {
+  if (linksStore.categoryLimitReached) {
+    ElMessage.warning(
+      `分类数量已达上限（${linksStore.categoryCount}/${linksStore.categoryLimit}）。请先删除或合并一个不用的分类腾位置，其下链接会回到“未分类”，不会丢失。`
+    )
+    return
+  }
   editingCategory.value = null
   categoryForm.name = ''
   categoryForm.color = '#409EFF'
@@ -95,35 +135,67 @@ function handleCategoryCommand(command, category) {
 }
 
 async function saveCategory() {
-  if (!categoryForm.name.trim()) {
+  const name = categoryForm.name.replace(/\s+/g, ' ').trim()
+  if (!name) {
     ElMessage.warning('请输入分类名称')
     return
   }
 
+  saving.value = true
   try {
     if (editingCategory.value) {
-      await linksStore.updateCategory(editingCategory.value.id, categoryForm)
-      ElMessage.success('更新成功')
+      const result = await linksStore.updateCategory(editingCategory.value.id, {
+        name,
+        color: categoryForm.color,
+      })
+      if (result.merged) {
+        ElMessage.success(`与已有分类重名，已合并到“${result.name}”，链接也一并归过去了`)
+      } else {
+        ElMessage.success('更新成功')
+      }
     } else {
-      await linksStore.createCategory(categoryForm)
-      ElMessage.success('创建成功')
+      const result = await linksStore.createCategory({ name, color: categoryForm.color })
+      if (result.merged) {
+        ElMessage.success(`已存在同名分类“${result.name}”，已直接合并，无需重复创建`)
+      } else {
+        ElMessage.success(
+          `创建成功（${linksStore.categoryCount}/${linksStore.categoryLimit}）`
+        )
+      }
     }
     categoryDialogVisible.value = false
   } catch (err) {
-    ElMessage.error('操作失败')
+    const data = err.response?.data
+    if (data?.code === 'CATEGORY_LIMIT_REACHED') {
+      ElMessage.error(
+        `分类数量已达上限（${data.count}/${data.limit}）。请先删除或合并一个不用的分类腾位置，其下链接会回到“未分类”。`
+      )
+    } else if (data?.code === 'CATEGORY_NAME_REQUIRED') {
+      ElMessage.error('请输入分类名称')
+    } else if (data?.code === 'CATEGORY_NAME_TOO_LONG') {
+      ElMessage.error(`分类名称不能超过 ${data.max_length} 个字符`)
+    } else {
+      ElMessage.error(data?.error || '操作失败')
+    }
+  } finally {
+    saving.value = false
   }
 }
 
 async function handleDeleteCategory(category) {
+  const linkCount = category.link_count ?? 0
+  const tip = linkCount > 0
+    ? `确定要删除分类 “${category.name}” 吗？该分类下的 ${linkCount} 个链接不会被删除，会回到“未分类”。`
+    : `确定要删除分类 “${category.name}” 吗？`
   try {
-    await ElMessageBox.confirm(`确定要删除分类 "${category.name}" 吗？该分类下的链接不会被删除。`, '确认删除', {
+    await ElMessageBox.confirm(tip, '确认删除', {
       type: 'warning',
     })
     await linksStore.deleteCategory(category.id)
-    ElMessage.success('删除成功')
+    ElMessage.success('删除成功，其下链接已回到“未分类”')
   } catch (err) {
     if (err !== 'cancel') {
-      ElMessage.error('删除失败')
+      ElMessage.error(err.response?.data?.error || '删除失败')
     }
   }
 }
@@ -143,6 +215,33 @@ async function handleDeleteCategory(category) {
 .sidebar-header h3 {
   margin: 0;
   font-size: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.category-usage {
+  font-size: 12px;
+  font-weight: normal;
+  color: #909399;
+  background: #f0f2f5;
+  padding: 1px 8px;
+  border-radius: 10px;
+}
+
+.category-usage.full {
+  color: #f56c6c;
+  background: #fef0f0;
+}
+
+.limit-hint {
+  margin-top: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #e6a23c;
+  background: #fdf6ec;
+  border-radius: 4px;
 }
 
 .category-list {

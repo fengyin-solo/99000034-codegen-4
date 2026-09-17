@@ -11,7 +11,7 @@ const importRoutes = require('./routes/import');
 const healthCheckRoutes = require('./routes/health-check');
 
 const app = express();
-const PORT = 3004;
+const PORT = process.env.PORT || 3004;
 
 // Middleware
 app.use(cors());

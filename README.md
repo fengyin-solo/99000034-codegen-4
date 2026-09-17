@@ -134,10 +134,10 @@ link-collector/
 - `DELETE /api/links/:id` - 删除链接
 
 ### 分类
-- `GET /api/categories` - 获取用户分类列表
-- `POST /api/categories` - 创建分类
-- `PUT /api/categories/:id` - 更新分类
-- `DELETE /api/categories/:id` - 删除分类
+- `GET /api/categories` - 获取用户分类列表（含每个分类的链接计数，以及 `count`/`limit` 容量信息，默认每账号上限 20 个）
+- `POST /api/categories` - 创建分类；名称会先做 trim 和空格折叠，与已有分类重名（忽略大小写、首尾及连续空格）时不新建，直接合并到已有分类；达到上限返回 `409 CATEGORY_LIMIT_REACHED`
+- `PUT /api/categories/:id` - 更新分类；改名后与其他分类重名时，会把该分类下的链接并入已有分类并删除自身（响应中 `merged: true`）
+- `DELETE /api/categories/:id` - 删除分类；其下链接自动回到“未分类”（`category_id` 置空）
 
 ### 标签
 - `GET /api/tags` - 获取用户所有标签 (带计数)
